@@ -3,9 +3,10 @@ name: Build ExtremeROM for S10e
 on:
   workflow_dispatch:
 
-# Оптимальный патч памяти (4 ГБ оставляет свободное место системе, предотвращая свопинг диска)
+# Глобальные патчи лимитов памяти (защита от утечек и падений по RAM)
 env:
   _JAVA_OPTIONS: "-Xmx4g"
+  MALLOC_ARENA_MAX: 2
 
 jobs:
   build:
@@ -18,16 +19,22 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      - name: Maximize free disk space (Fast cleanup)
+      - name: Maximize free disk space (Ultra Cleanup)
         run: |
-          echo "=== Диск до очистки ==="
+          echo "=== Диск до экстремальной очистки ==="
           df -h
+          
+          # Очистка неиспользуемых тяжелых системных библиотек и кэшей
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo rm -rf /usr/share/swift
           sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/man /usr/share/doc /usr/share/info /usr/share/xml /usr/share/locale
+          sudo rm -rf /usr/local/lib/node_modules
+          sudo rm -rf /opt/pipx
+          
           sudo docker image prune --all --force
           sudo docker builder prune -a
           echo "=== Диск после очистки ==="
@@ -43,6 +50,9 @@ jobs:
             curl xxd patchelf flex bison libarchive-tools build-essential pcre2-utils \
             lz4 brotli python-is-python3 python3-pip python3-setuptools bc zip unzip rsync \
             erofs-utils f2fs-tools
+          
+          # Очистка кэша APT для освобождения дополнительного места на диске
+          sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
           
           # Настройка прав Git для работы с субмодулями без блокировок прав доступа
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -127,7 +137,6 @@ jobs:
           sudo tee /usr/local/bin/java << 'EOF'
           #!/bin/bash
           
-          # Безопасный и быстрый поиск оригинального java через JAVA_HOME без медленного which -a
           if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
             REAL_JAVA="$JAVA_HOME/bin/java"
           else
@@ -148,7 +157,6 @@ jobs:
             fi
           done
           
-          # Если идет декомпиляция фреймворка, принудительно инжектируем параметр -api 29
           if [ "$IS_APKTOOL_DECOMPILE" = true ]; then
             NEW_ARGS=()
             for arg in "$@"; do
@@ -168,6 +176,7 @@ jobs:
       - name: Build dependencies
         run: |
           source ./buildenv.sh beyond0lte
+          ccache -M 2G # Ограничиваем максимальный размер кэша компилятора, чтобы уберечь диск
           ./scripts/build_dependencies.sh
 
       - name: Force Upgrade Apktool to v3.0.2 (Android 15 / One UI 7 Fix)
@@ -184,69 +193,102 @@ jobs:
             cp -v apktool_latest.jar out/host/apktool.jar
           fi
 
-      - name: Download source and target firmware using Rust Samloader
+      - name: Download and Extract Source Firmware (S23 FE)
         run: |
-          # Читаем конфигурацию донора из essi_64.sh
+          # 1. Читаем конфигурацию донора из essi_64.sh
           SOURCE_FIRMWARE=$(grep "SOURCE_FIRMWARE=" unica/configs/essi_64.sh | cut -d'"' -f2)
           SOURCE_MODEL=$(echo $SOURCE_FIRMWARE | cut -d'/' -f1)
           SOURCE_CSC=$(echo $SOURCE_FIRMWARE | cut -d'/' -f2)
-          
-          # Читаем конфигурацию цели (S10e) из config.sh
-          TARGET_FIRMWARE=$(grep "TARGET_FIRMWARE=" target/beyond0lte/config.sh | cut -d'"' -f2)
-          TARGET_MODEL=$(echo $TARGET_FIRMWARE | cut -d'/' -f1)
-          TARGET_CSC=$(echo $TARGET_FIRMWARE | cut -d'/' -f2)
-          
           if [ -z "$SOURCE_MODEL" ]; then SOURCE_MODEL="SM-S711B"; fi
           if [ -z "$SOURCE_CSC" ]; then SOURCE_CSC="EUX"; fi
-          if [ -z "$TARGET_MODEL" ]; then TARGET_MODEL="SM-G970F"; fi
-          if [ -z "$TARGET_CSC" ]; then TARGET_CSC="SER"; fi
           
-          echo "Донор: модель=$SOURCE_MODEL, CSC=$SOURCE_CSC"
-          echo "Цель: модель=$TARGET_MODEL, CSC=$TARGET_CSC"
-          
+          echo "Шаг 1: Скачивание донора $SOURCE_MODEL ($SOURCE_CSC) с проверкой и автовосстановлением"
           mkdir -p out/odin/${SOURCE_MODEL}_${SOURCE_CSC}
-          mkdir -p out/odin/${TARGET_MODEL}_${TARGET_CSC}
-          
-          # Заходим в папку, качаем на месте и распаковываем
-          echo "=== Скачивание прошивки донора через Rust Samloader ==="
           cd out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/
-          samloader download --model "$SOURCE_MODEL" --region "$SOURCE_CSC"
           
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-          if [ ! -z "$ZIP_FILE" ]; then
-            unzip -o "$ZIP_FILE"
-            rm -f "$ZIP_FILE"
-          fi
+          # Цикл самолечения: пробуем скачать и протестировать ZIP до 3 раз в случае обрыва сети
+          MAX_RETRIES=3
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Попытка скачивания донора $i из $MAX_RETRIES..."
+            samloader download --model "$SOURCE_MODEL" --region "$SOURCE_CSC"
+            
+            ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+            
+            # Проверяем ZIP-архив на целостность через 7z перед распаковкой
+            if [ -n "$ZIP_FILE" ] && 7z t "$ZIP_FILE" > /dev/null; then
+              echo "Архив донора успешно скачан и прошел верификацию!"
+              7z x -y "$ZIP_FILE"
+              rm -f "$ZIP_FILE"
+              break
+            else
+              echo "::warning:: Скачанный ZIP поврежден или недокачан. Удаляем и пробуем снова..."
+              rm -f *.zip || true
+              if [ $i -eq $MAX_RETRIES ]; then
+                echo "::error:: Не удалось скачать рабочий ZIP-архив донора после $MAX_RETRIES попыток."
+                exit 1
+              fi
+              sleep 10
+            fi
+          done
+          
           touch .downloaded
-          cd ../../.. # Возврат в корень репозитория
+          cd ../../..
           
-          echo "=== Скачивание прошивки цели (S10e) через Rust Samloader ==="
-          cd out/odin/${TARGET_MODEL}_${TARGET_CSC}/
-          samloader download --model "$TARGET_MODEL" --region "$TARGET_CSC"
-          
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-          if [ ! -z "$ZIP_FILE" ]; then
-            unzip -o "$ZIP_FILE"
-            rm -f "$ZIP_FILE"
-          fi
-          touch .downloaded
-          cd ../../.. # Возврат в корень репозитория
-
-      - name: Extract source firmware
-        run: |
+          echo "Шаг 2: Извлечение разделов донора"
           source ./buildenv.sh beyond0lte
           ./scripts/extract_fw.sh --force --ignore-target
           
-          echo "=== Очистка тяжелых архивов донора ==="
-          rm -f out/odin/*S711B*/*.tar.md5 out/odin/*S711B*/*.zip || true
+          echo "Шаг 3: Полная очистка тяжелых файлов донора из out/odin для освобождения диска"
+          rm -rf out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/* || true
+          df -h
 
-      - name: Extract target firmware
+      - name: Download and Extract Target Firmware (S10e)
         run: |
+          # 2. Читаем конфигурацию цели (S10e) из config.sh
+          TARGET_FIRMWARE=$(grep "TARGET_FIRMWARE=" target/beyond0lte/config.sh | cut -d'"' -f2)
+          TARGET_MODEL=$(echo $TARGET_FIRMWARE | cut -d'/' -f1)
+          TARGET_CSC=$(echo $TARGET_FIRMWARE | cut -d'/' -f2)
+          if [ -z "$TARGET_MODEL" ]; then TARGET_MODEL="SM-G970F"; fi
+          if [ -z "$TARGET_CSC" ]; then TARGET_CSC="SER"; fi
+          
+          echo "Шаг 1: Скачивание цели (S10e) $TARGET_MODEL ($TARGET_CSC) с проверкой и автовосстановлением"
+          mkdir -p out/odin/${TARGET_MODEL}_${TARGET_CSC}
+          cd out/odin/${TARGET_MODEL}_${TARGET_CSC}/
+          
+          # Цикл самолечения для прошивки цели
+          MAX_RETRIES=3
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Попытка скачивания цели $i из $MAX_RETRIES..."
+            samloader download --model "$TARGET_MODEL" --region "$TARGET_CSC"
+            
+            ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+            
+            if [ -n "$ZIP_FILE" ] && 7z t "$ZIP_FILE" > /dev/null; then
+              echo "Архив цели успешно скачан и прошел верификацию!"
+              7z x -y "$ZIP_FILE"
+              rm -f "$ZIP_FILE"
+              break
+            else
+              echo "::warning:: Скачанный ZIP поврежден или недокачан. Удаляем и пробуем снова..."
+              rm -f *.zip || true
+              if [ $i -eq $MAX_RETRIES ]; then
+                echo "::error:: Не удалось скачать рабочий ZIP-архив цели после $MAX_RETRIES попыток."
+                exit 1
+              fi
+              sleep 10
+            fi
+          done
+          
+          touch .downloaded
+          cd ../../..
+          
+          echo "Шаг 2: Извлечение разделов цели"
           source ./buildenv.sh beyond0lte
           ./scripts/extract_fw.sh --force --ignore-source
           
-          echo "=== Очистка тяжелых архивов цели ==="
-          rm -f out/odin/*G97*/*.tar.md5 out/odin/*G97*/*.zip || true
+          echo "Шаг 3: Полная очистка тяжелых файлов цели из out/odin для освобождения диска"
+          rm -rf out/odin/${TARGET_MODEL}_${TARGET_CSC}/* || true
+          df -h
 
       - name: Align Permissions & Ownership (Fix permission denied)
         run: |
