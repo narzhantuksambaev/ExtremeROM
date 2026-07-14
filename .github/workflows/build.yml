@@ -3,7 +3,7 @@ name: Build ExtremeROM for S10e
 on:
   workflow_dispatch:
 
-# Глобальные патчи лимитов памяти (защита от утечек и падений по RAM)
+# Оптимальный патч памяти (4 ГБ оставляет свободное место системе, предотвращая свопинг диска)
 env:
   _JAVA_OPTIONS: "-Xmx4g"
   MALLOC_ARENA_MAX: 2
@@ -19,21 +19,18 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      - name: Maximize free disk space (Ultra Cleanup)
+      - name: Maximize free disk space (Safe Cleanup)
         run: |
-          echo "=== Диск до экстремальной очистки ==="
+          echo "=== Диск до очистки ==="
           df -h
           
-          # Очистка неиспользуемых тяжелых системных библиотек и кэшей
+          # Удаляем только тяжелые изолированные среды разработки, которые НЕ ломают системный установщик apt/dpkg
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo rm -rf /usr/share/swift
           sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/share/man /usr/share/doc /usr/share/info /usr/share/xml /usr/share/locale
-          sudo rm -rf /usr/local/lib/node_modules
-          sudo rm -rf /opt/pipx
           
           sudo docker image prune --all --force
           sudo docker builder prune -a
@@ -206,7 +203,6 @@ jobs:
           mkdir -p out/odin/${SOURCE_MODEL}_${SOURCE_CSC}
           cd out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/
           
-          # Цикл самолечения: пробуем скачать и протестировать ZIP до 3 раз в случае обрыва сети
           MAX_RETRIES=3
           for i in $(seq 1 $MAX_RETRIES); do
             echo "Попытка скачивания донора $i из $MAX_RETRIES..."
@@ -214,7 +210,6 @@ jobs:
             
             ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
             
-            # Проверяем ZIP-архив на целостность через 7z перед распаковкой
             if [ -n "$ZIP_FILE" ] && 7z t "$ZIP_FILE" > /dev/null; then
               echo "Архив донора успешно скачан и прошел верификацию!"
               7z x -y "$ZIP_FILE"
@@ -255,7 +250,6 @@ jobs:
           mkdir -p out/odin/${TARGET_MODEL}_${TARGET_CSC}
           cd out/odin/${TARGET_MODEL}_${TARGET_CSC}/
           
-          # Цикл самолечения для прошивки цели
           MAX_RETRIES=3
           for i in $(seq 1 $MAX_RETRIES); do
             echo "Попытка скачивания цели $i из $MAX_RETRIES..."
