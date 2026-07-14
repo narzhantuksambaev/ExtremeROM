@@ -205,18 +205,30 @@ jobs:
           mkdir -p out/odin/${SOURCE_MODEL}_${SOURCE_CSC}
           mkdir -p out/odin/${TARGET_MODEL}_${TARGET_CSC}
           
-          # Исправлено: "download" идет перед флагами "--model" и "--region"
+          # Обход ограничений samloader v2.0.0: заходим в папку, качаем на месте и распаковываем
           echo "=== Скачивание прошивки донора через Rust Samloader ==="
-          samloader download --model "$SOURCE_MODEL" --region "$SOURCE_CSC" "out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/${SOURCE_MODEL}_${SOURCE_CSC}.zip"
-          unzip -o "out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/${SOURCE_MODEL}_${SOURCE_CSC}.zip" -d "out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/"
-          rm -f "out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/${SOURCE_MODEL}_${SOURCE_CSC}.zip"
-          touch "out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/.downloaded"
+          cd out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/
+          samloader download --model "$SOURCE_MODEL" --region "$SOURCE_CSC"
+          
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          if [ ! -z "$ZIP_FILE" ]; then
+            unzip -o "$ZIP_FILE"
+            rm -f "$ZIP_FILE"
+          fi
+          touch .downloaded
+          cd ../../.. # Возврат в корень репозитория
           
           echo "=== Скачивание прошивки цели (S10e) через Rust Samloader ==="
-          samloader download --model "$TARGET_MODEL" --region "$TARGET_CSC" "out/odin/${TARGET_MODEL}_${TARGET_CSC}/${TARGET_MODEL}_${TARGET_CSC}.zip"
-          unzip -o "out/odin/${TARGET_MODEL}_${TARGET_CSC}/${TARGET_MODEL}_${TARGET_CSC}.zip" -d "out/odin/${TARGET_MODEL}_${TARGET_CSC}/"
-          rm -f "out/odin/${TARGET_MODEL}_${TARGET_CSC}/${TARGET_MODEL}_${TARGET_CSC}.zip"
-          touch "out/odin/${TARGET_MODEL}_${TARGET_CSC}/.downloaded"
+          cd out/odin/${TARGET_MODEL}_${TARGET_CSC}/
+          samloader download --model "$TARGET_MODEL" --region "$TARGET_CSC"
+          
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          if [ ! -z "$ZIP_FILE" ]; then
+            unzip -o "$ZIP_FILE"
+            rm -f "$ZIP_FILE"
+          fi
+          touch .downloaded
+          cd ../../.. # Возврат в корень репозитория
 
       - name: Extract source firmware
         run: |
