@@ -3,9 +3,9 @@ name: Build ExtremeROM for S10e
 on:
   workflow_dispatch:
 
-# Глобальный патч памяти для Java (предотвращает Out of Memory при декомпиляции)
+# Оптимальный патч памяти (4 ГБ оставляет свободное место системе, предотвращая свопинг диска)
 env:
-  _JAVA_OPTIONS: "-Xmx5g"
+  _JAVA_OPTIONS: "-Xmx4g"
 
 jobs:
   build:
@@ -41,7 +41,8 @@ jobs:
             libbrotli-dev libgtest-dev libprotobuf-dev libunwind-dev libpcre2-dev \
             libzstd-dev linux-modules-extra-$(uname -r) lld protobuf-compiler webp \
             curl xxd patchelf flex bison libarchive-tools build-essential pcre2-utils \
-            lz4 brotli python-is-python3 python3-pip python3-setuptools bc zip unzip rsync
+            lz4 brotli python-is-python3 python3-pip python3-setuptools bc zip unzip rsync \
+            erofs-utils f2fs-tools
           
           # Настройка прав Git для работы с субмодулями без блокировок прав доступа
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -126,9 +127,10 @@ jobs:
           sudo tee /usr/local/bin/java << 'EOF'
           #!/bin/bash
           
-          # Находим оригинальный java в PATH (пропуская текущий враппер)
-          REAL_JAVA=$(which -a java | grep -v "/usr/local/bin/java" | head -n 1)
-          if [ -z "$REAL_JAVA" ]; then
+          # Безопасный и быстрый поиск оригинального java через JAVA_HOME без медленного which -a
+          if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+            REAL_JAVA="$JAVA_HOME/bin/java"
+          else
             REAL_JAVA="/usr/bin/java"
           fi
           
@@ -205,7 +207,7 @@ jobs:
           mkdir -p out/odin/${SOURCE_MODEL}_${SOURCE_CSC}
           mkdir -p out/odin/${TARGET_MODEL}_${TARGET_CSC}
           
-          # Обход ограничений samloader v2.0.0: заходим в папку, качаем на месте и распаковываем
+          # Заходим в папку, качаем на месте и распаковываем
           echo "=== Скачивание прошивки донора через Rust Samloader ==="
           cd out/odin/${SOURCE_MODEL}_${SOURCE_CSC}/
           samloader download --model "$SOURCE_MODEL" --region "$SOURCE_CSC"
