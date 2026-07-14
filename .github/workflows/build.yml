@@ -19,6 +19,13 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
+      - name: Ensure clean submodules (Fix "does not match index" compile errors)
+        run: |
+          echo "=== Принудительный сброс субмодулей до чистого оригинального состояния ==="
+          # Восстанавливает файлы субмодулей до состояния коммита, очищая их от любых случайных изменений
+          git submodule foreach --recursive git reset --hard
+          git submodule foreach --recursive git clean -fdx
+
       - name: Maximize free disk space (Safe Cleanup)
         run: |
           echo "=== Диск до очистки ==="
@@ -88,8 +95,9 @@ jobs:
       - name: Fix Windows CRLF line endings (Prevent patch failures)
         run: |
           echo "=== Очистка файлов патчей и скриптов от переносов Windows (CRLF -> LF) ==="
-          find . -type f -name "*.patch" -exec dos2unix {} + || true
-          find . -type f -name "*.sh" -exec dos2unix {} + || true
+          # Исправлено: find исключает папку external/ (субмодули), чтобы не ломать индексы Git при сборке android-tools
+          find . -type d -name "external" -prune -o -type f -name "*.patch" -exec dos2unix {} + || true
+          find . -type d -name "external" -prune -o -type f -name "*.sh" -exec dos2unix {} + || true
 
       - name: Install Custom Patch Wrapper (Bypass "No such file" patch errors)
         run: |
