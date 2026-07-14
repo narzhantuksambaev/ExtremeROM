@@ -37,6 +37,26 @@ jobs:
           echo "=== Диск после очистки ==="
           df -h
 
+      - name: Mount Entire Workspace to Secondary SSD (/mnt)
+        run: |
+          echo "=== Безопасный перенос всего проекта на свободный диск /mnt через mount --bind ==="
+          # 1. Создаем папку для сборки на свободном диске /mnt
+          sudo mkdir -p /mnt/work
+          sudo chown -R $USER:$USER /mnt/work
+          
+          # 2. Копируем все файлы репозитория (включая скрытые файлы и субмодули) на диск /mnt
+          rsync -a "$GITHUB_WORKSPACE/" /mnt/work/
+          
+          # 3. Монтируем папку с диска /mnt поверх нашего текущего воркспейса (прозрачно для всех скриптов)
+          sudo mount --bind /mnt/work "$GITHUB_WORKSPACE"
+          
+          # 4. Сбрасываем права, чтобы runner владел всеми перенесенными файлами
+          sudo chown -R $USER:$USER "$GITHUB_WORKSPACE"
+          sudo chmod -R 777 "$GITHUB_WORKSPACE"
+          
+          echo "=== Проверка диска в рабочей папке после монтирования ==="
+          df -h "$GITHUB_WORKSPACE"
+
       - name: Set up build environment & Git patches
         run: |
           sudo apt update
